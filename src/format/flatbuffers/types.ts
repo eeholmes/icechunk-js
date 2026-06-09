@@ -69,6 +69,9 @@ export interface ChunkRef {
   /** URL for virtual chunks */
   location: string | null;
 
+  /** Dictionary-compressed virtual location bytes */
+  compressedLocation?: Uint8Array | null;
+
   /** ETag checksum for virtual chunks */
   checksumEtag: string | null;
 
@@ -92,6 +95,12 @@ export interface Manifest {
 
   /** Array manifests, sorted by nodeId */
   arrays: ArrayManifest[];
+
+  /** Optional zstd dictionary used for compressed virtual chunk locations */
+  locationDictionary?: Uint8Array | null;
+
+  /** Compression algorithm for compressed virtual chunk locations */
+  compressionAlgorithm?: number;
 }
 
 // =============================================================================
@@ -222,7 +231,8 @@ export interface NativeChunkPayload {
 /** Virtual chunk - stored externally */
 export interface VirtualChunkPayload {
   type: "virtual";
-  location: string;
+  location: string | null;
+  compressedLocation?: Uint8Array | null;
   offset: number;
   length: number;
   checksumEtag: string | null;

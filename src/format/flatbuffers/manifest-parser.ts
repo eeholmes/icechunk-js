@@ -40,7 +40,18 @@ export function parseManifest(data: Uint8Array): Manifest {
     }
   }
 
-  return { id, arrays };
+  const locationDictionaryData = fbsManifest.locationDictionaryArray();
+  const locationDictionary =
+    locationDictionaryData && locationDictionaryData.length > 0
+      ? new Uint8Array(locationDictionaryData)
+      : null;
+
+  return {
+    id,
+    arrays,
+    locationDictionary,
+    compressionAlgorithm: fbsManifest.compressionAlgorithm(),
+  };
 }
 
 function parseArrayManifest(fbsArray: FbsArrayManifest): ArrayManifest {
@@ -92,6 +103,13 @@ function parseChunkRef(fbsRef: FbsChunkRef): ChunkRef {
   // Parse location (optional string)
   const location = fbsRef.location();
 
+  // Parse compressed_location (optional byte vector)
+  const compressedLocationData = fbsRef.compressedLocationArray();
+  const compressedLocation =
+    compressedLocationData && compressedLocationData.length > 0
+    ? new Uint8Array(compressedLocationData)
+    : null;
+
   // Parse checksum fields
   const checksumEtag = fbsRef.checksumEtag();
   const checksumLastModified = fbsRef.checksumLastModified();
@@ -103,6 +121,7 @@ function parseChunkRef(fbsRef: FbsChunkRef): ChunkRef {
     length,
     chunkId,
     location,
+    compressedLocation,
     checksumEtag,
     checksumLastModified,
   };
@@ -205,6 +224,18 @@ export function getChunkPayload(ref: ChunkRef): ChunkPayload {
       chunkId: ref.chunkId,
       offset: ref.offset,
       length: ref.length,
+    };
+  }
+
+  if (ref.compressedLocation != null) {
+    return {
+      type: "virtual",
+      location: null,
+      compressedLocation: ref.compressedLocation,
+      offset: ref.offset,
+      length: ref.length,
+      checksumEtag: ref.checksumEtag,
+      checksumLastModified: ref.checksumLastModified,
     };
   }
 

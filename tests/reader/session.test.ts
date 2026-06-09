@@ -54,6 +54,27 @@ function loadRepoIntoMockStorage(repoPath: string): MockStorage {
   return storage;
 }
 
+async function compressWithZstdDictionary(
+  content: Uint8Array,
+  dictionary: Uint8Array,
+): Promise<Uint8Array> {
+  const { ZstdCodec } = await import("zstd-codec");
+  const zstd = await new Promise<any>((resolve) => {
+    ZstdCodec.run(resolve);
+  });
+  const dict = new zstd.Dict.Compression(dictionary, 3);
+
+  try {
+    const compressed = new zstd.Simple().compressUsingDict(content, dict);
+    if (!compressed) {
+      throw new Error("Failed to compress test payload");
+    }
+    return compressed;
+  } finally {
+    dict.close();
+  }
+}
+
 /**
  * Helper to create a mock ReadSession with injected snapshot data.
  * This allows testing session methods without valid FlatBuffer data.
@@ -685,6 +706,49 @@ describe("ReadSession", () => {
         "https://example.com/data/chunks/abc.nc",
         expect.objectContaining({ headers: { Range: "bytes=0-3" } }),
       );
+    });
+
+    it("decompresses compressed virtual locations before fetching", async () => {
+      const mockData = new Uint8Array([9, 8, 7, 6]);
+      const fetchClient = {
+        fetch: vi.fn().mockResolvedValue({
+          ok: true,
+          status: 206,
+          arrayBuffer: vi.fn().mockResolvedValue(mockData.buffer),
+        } as any),
+      };
+
+      const session = createMockSession({ nodes: [] }) as any;
+      const locationDictionary = new TextEncoder().encode("s3://bucket/");
+      const compressedLocation = await compressWithZstdDictionary(
+        new TextEncoder().encode("s3://bucket/chunks/abc.nc"),
+        locationDictionary,
+      );
+      const payload = {
+        type: "virtual" as const,
+        location: null,
+        compressedLocation,
+        offset: 0,
+        length: 4,
+        checksumEtag: null,
+        checksumLastModified: 0,
+      };
+      const manifest = {
+        locationDictionary,
+        compressionAlgorithm: 1,
+      } as any;
+
+      const result = await session.fetchChunkPayload(
+        payload,
+        { fetchClient },
+        manifest,
+      );
+
+      expect(fetchClient.fetch).toHaveBeenCalledWith(
+        "https://bucket.s3.amazonaws.com/chunks/abc.nc",
+        expect.objectContaining({ headers: { Range: "bytes=0-3" } }),
+      );
+      expect(result).toEqual(mockData);
     });
 
     it("throws a clear error when a vcc:// URL references an unknown container", async () => {
