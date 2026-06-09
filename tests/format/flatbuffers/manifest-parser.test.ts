@@ -83,6 +83,25 @@ function virtualChunkRef(
   };
 }
 
+function compressedVirtualChunkRef(
+  index: number[],
+  compressedLocation: Uint8Array,
+  offset: number,
+  length: number,
+): ChunkRef {
+  return {
+    index,
+    inline: null,
+    offset,
+    length,
+    chunkId: null,
+    location: null,
+    compressedLocation,
+    checksumEtag: "etag123",
+    checksumLastModified: 1700000000,
+  };
+}
+
 describe("findChunkRef", () => {
   describe("binary search correctness", () => {
     it("should find chunk in single-element array", () => {
@@ -486,6 +505,21 @@ describe("getChunkPayload", () => {
       expect(payload.length).toBe(1024);
       expect(payload.checksumEtag).toBe("etag123");
       expect(payload.checksumLastModified).toBe(1700000000);
+    }
+  });
+
+  it("should extract compressed virtual payload", () => {
+    const compressedLocation = new Uint8Array([1, 2, 3, 4]);
+    const ref = compressedVirtualChunkRef([0], compressedLocation, 2048, 1024);
+
+    const payload = getChunkPayload(ref);
+
+    expect(payload.type).toBe("virtual");
+    if (payload.type === "virtual") {
+      expect(payload.location).toBeNull();
+      expect(payload.compressedLocation).toEqual(compressedLocation);
+      expect(payload.offset).toBe(2048);
+      expect(payload.length).toBe(1024);
     }
   });
 

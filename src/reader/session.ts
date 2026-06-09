@@ -60,6 +60,58 @@ function makeRangeStoreCacheKey(parts: readonly RangeStoreKeyPart[]): string {
   return JSON.stringify(parts);
 }
 
+const textDecoder = new TextDecoder();
+let zstdCodecPromise:
+  | Promise<{
+      Simple: new () => {
+        decompressUsingDict(
+          compressedBytes: Uint8Array,
+          ddict: { get(): unknown; close(): void },
+        ): Uint8Array | null;
+      };
+      Dict: {
+        Decompression: new (dictBytes: Uint8Array) => {
+          get(): unknown;
+          close(): void;
+        };
+      };
+    }>
+  | undefined;
+
+async function getZstdCodec() {
+  if (!zstdCodecPromise) {
+    zstdCodecPromise = import("zstd-codec").then(
+      ({ ZstdCodec }) =>
+        new Promise((resolve) => {
+          ZstdCodec.run((zstd: any) => resolve(zstd));
+        }),
+    );
+  }
+
+  return zstdCodecPromise;
+}
+
+async function decompressVirtualLocation(
+  compressedLocation: Uint8Array,
+  locationDictionary: Uint8Array,
+): Promise<string> {
+  const zstd = await getZstdCodec();
+  const dict = new zstd.Dict.Decompression(locationDictionary);
+
+  try {
+    const decompressed = new zstd.Simple().decompressUsingDict(
+      compressedLocation,
+      dict,
+    );
+    if (!decompressed) {
+      throw new Error("Failed to decompress virtual chunk location");
+    }
+    return textDecoder.decode(decompressed);
+  } finally {
+    dict.close();
+  }
+}
+
 /** Options for chunk reads from a ReadSession. */
 export interface ReadOptions extends RequestOptions {
   /**
@@ -532,7 +584,7 @@ export class ReadSession {
 
       // Fetch the chunk data based on payload type with signal
       const payload = getChunkPayload(chunkRef);
-      return this.fetchChunkPayload(payload, options);
+      return this.fetchChunkPayload(payload, options, manifest);
     }
 
     return null;
@@ -580,7 +632,7 @@ export class ReadSession {
       if (!chunkRef) continue;
 
       const payload = getChunkPayload(chunkRef);
-      return this.fetchChunkPayloadRange(payload, range, options);
+      return this.fetchChunkPayloadRange(payload, range, options, manifest);
     }
 
     return null;
@@ -607,6 +659,7 @@ export class ReadSession {
   private async fetchChunkPayload(
     payload: ChunkPayload,
     options?: ReadOptions,
+    manifest?: Manifest,
   ): Promise<Uint8Array> {
     switch (payload.type) {
       case "inline":
@@ -637,8 +690,12 @@ export class ReadSession {
       case "virtual": {
         // Virtual chunks reference external URLs
         // Expand any vcc://name/path → absolute URL, then translate s3:// etc. → HTTPS
+        const resolvedLocation = await this.resolveVirtualLocation(
+          payload,
+          manifest,
+        );
         const absoluteLocation = expandVccUrl(
-          payload.location,
+          resolvedLocation,
           this.virtualChunkContainers,
         );
         const httpUrl = translateToHttpUrl(
@@ -676,6 +733,7 @@ export class ReadSession {
     payload: ChunkPayload,
     range: { offset: number; length: number } | { suffixLength: number },
     options?: ReadOptions,
+    manifest?: Manifest,
   ): Promise<Uint8Array> {
     // Compute absolute start/end within the chunk's data
     let rangeStart: number;
@@ -724,8 +782,12 @@ export class ReadSession {
         const absoluteStart = payload.offset + rangeStart;
         const expectedSize = rangeEnd - rangeStart;
 
+        const resolvedLocation = await this.resolveVirtualLocation(
+          payload,
+          manifest,
+        );
         const absoluteLocation = expandVccUrl(
-          payload.location,
+          resolvedLocation,
           this.virtualChunkContainers,
         );
         const httpUrl = translateToHttpUrl(
@@ -756,6 +818,36 @@ export class ReadSession {
         return data;
       }
     }
+  }
+
+  private async resolveVirtualLocation(
+    payload: Extract<ChunkPayload, { type: "virtual" }>,
+    manifest?: Manifest,
+  ): Promise<string> {
+    if (payload.location !== null) {
+      return payload.location;
+    }
+
+    if (payload.compressedLocation === undefined || payload.compressedLocation === null) {
+      throw new Error("Virtual chunk payload is missing a location");
+    }
+
+    const compressionAlgorithm = manifest?.compressionAlgorithm ?? 1;
+    if (compressionAlgorithm === 0) {
+      return textDecoder.decode(payload.compressedLocation);
+    }
+
+    const locationDictionary = manifest?.locationDictionary;
+    if (!locationDictionary || locationDictionary.length === 0) {
+      throw new Error(
+        "Missing location dictionary for compressed virtual chunk location",
+      );
+    }
+
+    return decompressVirtualLocation(
+      payload.compressedLocation,
+      locationDictionary,
+    );
   }
 
   /** Binary search for a node by path */
