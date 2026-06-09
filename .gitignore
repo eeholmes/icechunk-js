@@ -5,7 +5,7 @@ node_modules/
 .bin/
 
 # Build output
-dist/
+# dist/
 
 # IDE
 .idea/
@@ -16,6 +16,7 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+*.Rproj
 
 # Logs
 *.log
@@ -34,3 +35,4 @@ tests/data/
 # flatc barrel files (generated but unused)
 src/format/flatbuffers/all.ts
 src/format/flatbuffers/generated.ts
+.Rproj.user
